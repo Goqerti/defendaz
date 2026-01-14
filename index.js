@@ -167,14 +167,21 @@ const reply = []
 
 bot.use((ctx, next) => telegrafStart(ctx, next))
 
+// ✅ FIX: SESSİYA ID STRING OLMALIDIR
 bot.use(
   session({
     getSessionKey: (ctx) => {
-      if (ctx?.from?.id) return ctx.from.id
-      return 0
+      if (ctx?.from?.id) return String(ctx.from.id)
+      return String(ctx?.chat?.id || '0')
     }
   })
 )
+
+// ✅ FIX: SAFETY MIDDLEWARE (Cannot read properties of undefined xətasını önləmək üçün)
+bot.use((ctx, next) => {
+  ctx.session = ctx.session || {}
+  return next()
+})
 
 // --- I18N ---
 const r = new Resources({ lang: config.defaultLang })
