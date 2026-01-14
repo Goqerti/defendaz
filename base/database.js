@@ -8,18 +8,7 @@ const db = new JsonDB();
 
 /**
  * This file replaces the original PostgreSQL implementation with a JSON file DB.
- * Public API is kept compatible with the old ./base/database.js exports, so the
- * gameplay and plugins can remain unchanged.
- *
- * Tables:
- * - users: { [id:string]: UserRow }
- * - clans: { [id:string]: ClanRow }
- * - stats: Array<{ id:number, time:number, invite?:number }>
- *
- * Notes:
- * - "time" fields are stored as epoch milliseconds.
- * - getUser/randomUser/topUsers etc compute derived fields (timerunning, run)
- *   the same way SQL did: now() - time.
+ * Public API is kept compatible with the old ./base/database.js exports.
  */
 
 const DEFAULTS = {
@@ -78,7 +67,9 @@ function getClansTable() {
 }
 
 function getStatsTable() {
-  return db.load('stats', []);
+  // ✅ FIX: Həmişə array qaytarmasına əmin oluruq
+  const s = db.load('stats', []);
+  return Array.isArray(s) ? s : [];
 }
 
 async function getUser(id) {
@@ -103,8 +94,10 @@ async function setUser(id, name) {
   users[key] = row;
   db.save('users');
 
-  // join stats log
-  const stats = getStatsTable();
+  // ✅ FIX: stats.push xətasının qarşısını almaq
+  let stats = getStatsTable();
+  if (!Array.isArray(stats)) stats = []; // Ehtiyat yoxlama
+  
   stats.push({ id: Number(id), time: nowMs(), invite: 0 });
   db.save('stats');
 
@@ -212,7 +205,6 @@ async function saveAtack(playId, playXp, ctx, opponent) {
   users[key1].money = Number(ctx.db.money);
   users[key1].opponent = Number(opponent);
   users[key1].troops = Number(ctx.db.troops);
-  // NOTE: original SQL didn't update time here; main flow usually calls saveUser
   db.save('users');
 
   return withDerived(users[key1]);
@@ -221,7 +213,6 @@ async function saveAtack(playId, playXp, ctx, opponent) {
 async function getStats24() {
   const users = getUsersTable();
   const cutoff = nowMs() - 24 * 60 * 60 * 1000;
-  // mimic SQL: users where time < now - 24h
   return Object.values(users).filter(u => Number(u.time || 0) < cutoff).map(withDerived);
 }
 
@@ -236,7 +227,10 @@ async function getAllUsers() {
 }
 
 async function joinUserInvite(id, invite) {
-  const stats = getStatsTable();
+  // ✅ FIX: stats.push xətasının qarşısını almaq
+  let stats = getStatsTable();
+  if (!Array.isArray(stats)) stats = [];
+  
   stats.push({ id: Number(id), time: nowMs(), invite: Number(invite) });
   db.save('stats');
   return true;
@@ -245,7 +239,7 @@ async function joinUserInvite(id, invite) {
 async function findAllTable(name) {
   if (name === 'users') return db.allRows('users').map(withDerived);
   if (name === 'clans') return db.allRows('clans');
-  if (name === 'stats') return db.allRows('stats');
+  if (name === 'stats') return getStatsTable();
   return db.allRows(name);
 }
 
@@ -326,12 +320,10 @@ async function topUsers(id, row = 'money') {
   const users = db.allRows('users').map(withDerived);
   const sorted = sortByKeyDesc(users, row);
 
-  // emulate SQL ranking (dense-ish): just index+1
   const withPos = sorted.map((u, i) => ({ ...u, position: i + 1 }));
   const me = withPos.find(u => String(u.id) === String(id));
   const top10 = withPos.slice(0, 10);
 
-  // SQL returned top10 + me if not in top10
   if (me && !top10.find(u => String(u.id) === String(id))) {
     top10.push(me);
   }
