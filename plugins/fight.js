@@ -4,7 +4,15 @@ const forest = () => {
 }
 
 const hack = ctx => {
-	return ctx.answerCbQuery(ctx._`:) Start a new game!`, true)
+	return ctx.answerCbQuery(ctx._`:) Start a new game!`, true).catch(() => {})
+}
+
+// ✅ YENİ: "Message not modified" xətalarını gizlətmək üçün funksiya
+const ignoreMessageNotModified = (e) => {
+	if (e?.description?.includes('message is not modified')) {
+		return
+	}
+	throw e
 }
 
 const doAttack = (p1, p2) => {
@@ -13,6 +21,8 @@ const doAttack = (p1, p2) => {
 
 const dualAttack = async (ctx, play1) => {
 	play1 = await ctx.database.getUser(play1.id)
+	if (!play1) return hack(ctx)
+
 	play1._ = ctx.loadLang(play1.lang)
 
 	let play2 = ctx.db
@@ -191,13 +201,14 @@ ${ctx.nl(play1.money)} (+${play1.winMoney}) 💰 ${ctx.nl(play2.money)} (+${play
 		disable_web_page_preview: true
 	})
 
+	// ✅ FIX: ignoreMessageNotModified əlavə edildi
 	ctx.editMessageText(`${text2}${ctx.fixKeyboard}`, {
 		parse_mode: 'HTML',
 		reply_markup: {
 			inline_keyboard: keyboard2
 		},
 		disable_web_page_preview: true
-	})
+	}).catch(ignoreMessageNotModified)
 }
 
 const attack = async (ctx, opponent) => {
@@ -207,6 +218,8 @@ const attack = async (ctx, opponent) => {
 
 	const playId = ctx.match[4]
 	let play = await ctx.database.getUser(playId)
+	if (!play) return hack(ctx) // Rəqib yoxdursa hack çağırılır
+
 	play._ = ctx.loadLang(play.lang)
 	let text = ctx._`<b>${ctx.db.castle} City:</b> ${ctx.db.name}${ctx.tags(ctx.from.id)}
 <b>🏅 Level:</b> ${ctx.db.level}
@@ -393,6 +406,8 @@ ${textReply}`
 
 	map = data.map
 	win = win ? ctx._('WIN!') : ctx._('LOST!')
+	
+	// ✅ FIX: ignoreMessageNotModified əlavə edildi
 	await ctx.editMessageText(text + ctx.fixKeyboard, {
 		parse_mode: 'HTML',
 		reply_markup: {
@@ -402,7 +417,7 @@ ${textReply}`
 			}], [{text: ctx._`📜 Menu`, callback_data: 'menu:main'}]]
 		},
 		disable_web_page_preview: true
-	})
+	}).catch(ignoreMessageNotModified)
 
 	if (res.reply && res.run) {
 		await ctx.telegram.sendMessage(play.id, play._`
@@ -426,6 +441,9 @@ ${textReply}${ctx.fixKeyboard}`, {
 }
 
 const mapHide = (ctx, opponent) => {
+	// ✅ FIX: City array-ni yoxlayırıq ki, crash olmasın
+	if (!opponent || !opponent.city) return [] 
+	
 	return opponent.city.reduce((total, id, index) => {
 		let key = {}
 		key = index == 12 ? {
@@ -451,24 +469,33 @@ const showMap = (ctx, opponent, h, v) => {
 	const items = []
 	let index = 0
 	let map = mapHide(ctx, opponent)
-	map[2][2] = {
-		text: '🏠',
-		callback_data: 'fight:done'
+	
+	// ✅ FIX: Map ölçüsünü yoxlayırıq
+	if (map.length > 2 && map[2].length > 2) {
+		map[2][2] = {
+			text: '🏠',
+			callback_data: 'fight:done'
+		}
 	}
+	
 	map = map.reduce((totalV, keys, indexV) => {
 		totalV = [...totalV, [...(
 			keys.reduce((totalH, key, indexH) => {
 				if (indexV == v || indexV - 1 == v || indexV + 1 == v) {
 					if (indexH == h || indexH - 1 == h || indexH + 1 == h) {
 						if (indexV === 2 && indexH === 2) {
-							key.text = ctx.castles[opponent.city[12]]
+							if (opponent.city && opponent.city[12]) {
+								key.text = ctx.castles[opponent.city[12]]
+							}
 						} else {
-							const id = opponent.city[index]
-							items.push(ctx.items[id])
-							if (id == 0) {
-								key.text = forest()
-							} else {
-								key.text = ctx.items[id].icon
+							if (opponent.city) {
+								const id = opponent.city[index]
+								items.push(ctx.items[id])
+								if (id == 0) {
+									key.text = forest()
+								} else {
+									key.text = ctx.items[id].icon
+								}
 							}
 						}
 					}
@@ -517,20 +544,19 @@ const fightTypes = [{
 }]
 
 const base = async ctx => {
-	if (!ctx.session.ftype) {
-		ctx.session.ftype = 0
-	}
-
-	if (!ctx.session.dual) {
-		ctx.session.dual = false
-	}
-
-	if (!ctx.session.flast) {
-		ctx.session.flast = [0, 0, 0]
-	}
+	// ✅ FIX: Sessiya dəyişənlərini təhlükəsiz başlat
+	if (!ctx.session) ctx.session = {}
+	if (!ctx.session.ftype) ctx.session.ftype = 0
+	if (!ctx.session.dual) ctx.session.dual = false
+	if (!ctx.session.flast) ctx.session.flast = [0, 0, 0]
 
 	let checkAttack = false
+	
+	// Rəqib axtarışı
 	let opponent = await ctx.database.randomUser(60)
+	
+	if (!opponent) opponent = [] // Əgər db səhv qaytarsa, boş array elə
+
 	opponent = opponent.filter(e => {
 		return e.id != ctx.from.id &&
 					e.id != ctx.match[4] &&
@@ -546,7 +572,21 @@ const base = async ctx => {
 	}
 
 	opponent = fightTypes[ctx.session.ftype].select(opponent, ctx)
-	opponent = opponent[Math.floor(Math.random() * (5 - 0))]
+
+	// ✅ FIX: Əgər rəqib tapılmadısa, xəta vermək əvəzinə bildiriş göndər
+	if (!opponent || opponent.length === 0) {
+		return ctx.answerCbQuery(ctx._`No opponents found! Try again later.`, true).catch(() => {})
+	}
+
+	// ✅ FIX: Array uzunluğuna görə təhlükəsiz indeks seçimi
+	const maxIndex = Math.min(opponent.length, 5)
+	const randomIndex = Math.floor(Math.random() * maxIndex)
+	opponent = opponent[randomIndex]
+
+	// Hər ehtimala qarşı rəqib obyektini yoxlayırıq
+	if (!opponent) {
+		return ctx.answerCbQuery(ctx._`Opponent selection error.`, true).catch(() => {})
+	}
 
 	let menu = [
 		[{
@@ -577,6 +617,12 @@ const base = async ctx => {
 		})
 		await ctx.database.updateUser(ctx.from.id, 'inventory', ctx.db.inventory)
 		opponent = await ctx.database.getUser(ctx.db.opponent)
+		if (!opponent) return hack(ctx) // Rəqib yoxdursa çıx
+	}
+
+	// ✅ FIX: Opponent-in city obyekti olduğundan əmin oluruq
+	if (!opponent.city) {
+		opponent.city = new Array(25).fill(0) // Fallback
 	}
 
 	let text = ctx._`
@@ -696,23 +742,25 @@ Waiting for players!`
 	]
 
 	if (checkAttack) {
+		// ✅ FIX: ignoreMessageNotModified əlavə edildi
 		return ctx.replyWithHTML(text + ctx.fixKeyboard, {
 			reply_markup: {
 				inline_keyboard: keyboard
 			},
 			disable_web_page_preview: true
-		})
+		}).catch(ignoreMessageNotModified)
 	}
 
 	await ctx.database.updateUser(ctx.from.id, 'opponent', opponent.id)
 
+	// ✅ FIX: ignoreMessageNotModified əlavə edildi
 	return ctx.editMessageText(text + ctx.fixKeyboard, {
 		parse_mode: 'HTML',
 		reply_markup: {
 			inline_keyboard: keyboard
 		},
 		disable_web_page_preview: true
-	})
+	}).catch(ignoreMessageNotModified)
 }
 
 module.exports = {
